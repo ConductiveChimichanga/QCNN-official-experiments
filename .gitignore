@@ -1,0 +1,13 @@
+01 - Initial implementation of QCNN/walkthrough.md
+01 - Initial implementation of QCNN/qcnn_demo.py
+01 - Initial implementation of QCNN/qcnn_simple.py
+01 - Initial implementation of QCNN/__pycache__/
+01 - Initial implementation of QCNN/**/__pycache__/
+01 - Initial implementation of QCNN/models/**
+01 - Initial implementation of QCNN/results/**
+01 - Initial implementation of QCNN/unitaries/conv_block.qasm.inc
+01 - Initial implementation of QCNN/unitaries/simple_entangle.qasm.inc
+01 - Initial implementation of QCNN/unitaries/pooling_ansatz.qasm.inc
+
+
+

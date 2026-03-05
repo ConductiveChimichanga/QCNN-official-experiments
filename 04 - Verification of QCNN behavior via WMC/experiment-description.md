@@ -1,4 +1,3 @@
-
 # Experiment 04 - Verification of QCNN Behavior via Weighted Model Counting
 
 ## Overview

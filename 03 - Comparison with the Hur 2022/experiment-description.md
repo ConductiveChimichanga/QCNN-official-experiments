@@ -1,4 +1,3 @@
-
 # Experiment 03 - Comparison with the Hur et al. 2022 Paper
 
 ## Overview
