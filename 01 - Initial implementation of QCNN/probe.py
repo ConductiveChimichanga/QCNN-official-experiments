@@ -106,8 +106,9 @@ def print_classification_report(Y_te, Y_pred, scores, is_correct):
     print(f"\ndigit 0  precision={safe(tn, tn+fn):.3f}  recall={safe(tn, tn+fp):.3f}")
     print(f"digit 1  precision={safe(tp, tp+fp):.3f}  recall={safe(tp, tp+fn):.3f}")
 
-Y_te = np.array([-1, -1, 1, 1])  #true labels
-Y_pred = np.array([-1, 1, 1, -1]) #pred
-scores = np.array([-0.8, 0.2, 0.5, -0.3]) #circuit scores
-is_correct = (Y_pred == Y_te)
-print_classification_report(Y_te, Y_pred, scores, is_correct)
+if __name__ == "__main__":
+    Y_te = np.array([-1, -1, 1, 1])
+    Y_pred = np.array([-1, 1, 1, -1])
+    scores = np.array([-0.8, 0.2, 0.5, -0.3])
+    is_correct = (Y_pred == Y_te)
+    print_classification_report(Y_te, Y_pred, scores, is_correct)
