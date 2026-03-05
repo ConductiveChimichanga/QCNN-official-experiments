@@ -1,0 +1,33 @@
+{
+    "n_qubits": 4,
+    "layers": [
+        {
+            "name": "conv1",
+            "prefix": "c1",
+            "unitary": "U_9",
+            "pairs": [[0, 1], [2, 3]],
+            "comment": "First convolutional layer on pairs (0,1) and (2,3)"
+        },
+        {
+            "name": "pool1",
+            "prefix": "p1",
+            "unitary": "Pooling_ansatz1",
+            "pairs": [[0, 1], [2, 3]],
+            "comment": "First pooling layer reducing 4->2 qubits"
+        },
+        {
+            "name": "conv2",
+            "prefix": "c2",
+            "unitary": "U_9",
+            "pairs": [[0, 2]],
+            "comment": "Second convolutional layer on remaining qubits"
+        },
+        {
+            "name": "pool2",
+            "prefix": "p2",
+            "unitary": "Pooling_ansatz1",
+            "pairs": [[0, 2]],
+            "comment": "Final pooling layer reducing to single qubit"
+        }
+    ]
+}
