@@ -1,12 +1,15 @@
 import json
+import multiprocessing as mp
 import os
 import re
+import shlex
 import ast
 import tempfile
 import importlib.util
 import operator as op
 from pathlib import Path
 import numpy as np
+from profiling import timeit, timed
 
 
 HERE = Path(__file__).parent
@@ -18,7 +21,10 @@ PARAM_NAMES = ["c1_rx0", "c1_rx1", "p1_crz_angle", "p1_crx_angle",
 
 #load config.json from the repo root and point quokka at it
 #if the file is missing, quokka falls back to its defaults (gpmc must be in PATH)
+_QUOKKA_CONFIG = {}
+
 def _patch_quokka_config():
+    global _QUOKKA_CONFIG
     cfg_path = HERE / "config.json"
     if not cfg_path.exists():
         return
@@ -32,6 +38,7 @@ def _patch_quokka_config():
         parts[0] = str((HERE / parts[0]).resolve())
         cfg["ToolInvocation"] = " ".join(parts)
 
+    _QUOKKA_CONFIG = cfg
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
     json.dump(cfg, tmp)
     tmp.close()
@@ -44,19 +51,21 @@ _patch_quokka_config()
 #import quokka after patching the config
 import quokka_sharp as qk
 import quokka_sharp.sim as _sim
+from quokka_sharp import config as _qconfig
 
 
 #snapshot the tool command now, before the upstream library can mutate it
 #this avoids a bug where quokka_sharp.sim converts the command string to a list in-place
-_TOOL_CMD = str(_sim.CONFIG["ToolInvocation"])
+_TOOL_CMD = shlex.split(_qconfig.CONFIG["ToolInvocation"])
 
 
 def _stable_wmc(path, square):
-    proc = _sim.Popen(_TOOL_CMD.split() + [path], stdout=_sim.PIPE)
+    proc = _sim.Popen(_TOOL_CMD + [path], stdout=_sim.PIPE)
     try:
-        return _sim.parse_wmc_result(proc.communicate(timeout=_sim.TIMEOUT), square)
+        timeout = getattr(_sim, "TIMEOUT", _qconfig.CONFIG.get("TIMEOUT"))
+        return _sim.parse_wmc_result(proc.communicate(timeout=timeout), square)
     except _sim.TimeoutExpired:
-        os.kill(proc.pid, 9)
+        proc.kill()
         return "TIMEOUT"
 
 _sim.WMC = _stable_wmc
@@ -106,6 +115,7 @@ def _eval_gate_angle(expr):
         raise ValueError(expr)
     return walk(ast.parse(expr, mode="eval"))
 
+@timeit("render qasm")
 def _render_qasm(template, param_dict):
 
     #first transform: fill {{param_name}} placeholders with their numeric values
@@ -125,6 +135,7 @@ def _render_qasm(template, param_dict):
     return re.sub(r"\b([a-z]+)\(([^)]+)\)\s+(q\[\d+\]);", fix_angle, filled)
 
 
+@timeit("build circuit")
 def build_circuit(features, params):
     #render the parameterised template, then insert ry encoding gates after the qreg declaration
     rendered = _render_qasm(_TEMPLATE, dict(zip(PARAM_NAMES, params)))
@@ -148,26 +159,47 @@ def build_circuit(features, params):
     return "\n".join(lines[:header_end] + encoders + lines[header_end:])
 
 
+@timeit("run quokka [total]")
 def run_quokka(qasm_str):
-    #evaluate the expectation value <Z_0> = p(q0=0) - p(q0=1) using weighted model counting
+    #evaluate <Z_0> from p(q0=0), using <Z_0> = p0 - (1 - p0) = 2p0 - 1
     with tempfile.TemporaryDirectory(prefix="qcnn_") as td:
         qf = Path(td) / "circ.qasm"
         qf.write_text(qasm_str)
 
-        circuit = qk.encoding.QASMparser(str(qf), translate_ccx=True)
+        with timed("run quokka [qasm parse]"):
+            circuit = qk.encoding.QASMparser(str(qf), translate_ccx=True)
 
-        #evaluating q0 is 0
-        cnf0 = qk.encoding.QASM2CNF(circuit, computational_basis=True)
-        cnf0.add_measurement({0: 0.0})
-        p0 = qk.Simulate(cnf0, cnf_file_root=td)
+        #evaluate q0 = 0 once, then recover the expectation value
+        with timed("run quokka [wmc p0]"):
+            cnf0 = qk.encoding.QASM2CNF(circuit, computational_basis=True)
+            cnf0.add_measurement({0: 0.0})
+            p0 = qk.Simulate(cnf0, cnf_file_root=td)
 
-        #evaluating q0 is 1
-        cnf1 = qk.encoding.QASM2CNF(circuit, computational_basis=True)
-        cnf1.add_measurement({0: 1.0})
-        p1 = qk.Simulate(cnf1, cnf_file_root=td)
-
-    return float(p0 - p1)
+    return float(2 * p0 - 1)
 
 
+@timeit("predict")
 def predict(features, params):
     return run_quokka(build_circuit(features, params))
+
+
+def _pool_initializer():
+    #re-apply quokka config in each worker process
+
+    _patch_quokka_config()
+
+
+def _predict_task(args):
+    #wrapper so multiprocessing.Pool can map over it
+
+    features, params = args
+    return run_quokka(build_circuit(features, params))
+
+
+def predict_batch(features_list, params, pool=None):
+    #evaluate one forward pass per sample, optionally in parallel
+    
+    tasks = [(f, params) for f in features_list]
+    if pool is None or len(tasks) <= 1:
+        return [_predict_task(t) for t in tasks]
+    return pool.map(_predict_task, tasks)

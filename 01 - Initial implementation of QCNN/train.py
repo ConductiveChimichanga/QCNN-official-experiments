@@ -1,36 +1,35 @@
 from datetime import datetime
+import multiprocessing as mp
 import numpy as np
 
-from circuit import predict, PARAM_NAMES
+from circuit import predict, predict_batch, PARAM_NAMES, _pool_initializer
 from data import make_synthetic_data, make_mnist_data
-from optimiser import Adam, numerical_gradient
+from optimiser import Adam, numerical_gradient, numerical_gradient_parallel
 from utils import save_model, log_csv, MODELS_DIR
+from profiling import timeit, timed
 
 #calculate MSE = mean squared error between predictions and labels
-def mse(params, features, labels):
-    raw = []
-    for x in features:
-        raw.append(predict(x, params))
-    predictions = np.array(raw)
+@timeit("mse")
+def mse(params, features, labels, pool=None):
+    predictions = np.array(predict_batch(features, params, pool))
     return float(np.mean((predictions - labels) ** 2))
 
 #calculate accuracy = ratio of correct predictions
-def accuracy(params, features, labels):
-    raw = []
-    for x in features:
-        raw.append(predict(x, params))
-    predictions = np.array(raw)
+def accuracy(params, features, labels, pool=None):
+    predictions = np.array(predict_batch(features, params, pool))
     return float(np.mean(np.sign(predictions) == labels))
 
 #train loop
 def train(epochs=50, lr=0.05, seed=42, n_train=40, n_test=10,
-          batch_size=0, log_every=10, use_mnist=False, save_path=None):
+          batch_size=0, log_every=10, use_mnist=False, save_path=None,
+          n_workers=None):
 
-    #random generators for data, initial params, and batch 
+    #random generators for data, initial params, and batch
     data_rng = np.random.default_rng(seed)
     param_rng = np.random.default_rng(seed + 1000)
     batch_rng = np.random.default_rng(seed + 2000)
 
+    n_workers = n_workers or mp.cpu_count()
 
     #if manist, load and preprocess, else use synth data
     if use_mnist:
@@ -50,30 +49,36 @@ def train(epochs=50, lr=0.05, seed=42, n_train=40, n_test=10,
     print(f"seed={seed}  epochs={epochs}  lr={lr}  batch={effective_bs}")
 
     history = []
-    for epoch in range(epochs):
+    
+    #pool is created once and reused across all epochs — avoids per-epoch startup cost.
+    with mp.Pool(processes=n_workers, initializer=_pool_initializer) as pool:
+        for epoch in range(epochs):
+            with timed("epoch [wall]"):
 
-        #if there is a batch, sample it, otherwise use the whoel training set.
-        if effective_bs < n_train:       
-            batch_idx = batch_rng.choice(n_train, effective_bs, replace=False)
-            X_batch, Y_batch = X_tr[batch_idx], Y_tr[batch_idx]
-        else:
-            X_batch, Y_batch = X_tr, Y_tr
+            #if there is a batch, sample it, otherwise use the whoel training set.
+                if effective_bs < n_train:
+                    batch_idx = batch_rng.choice(n_train, effective_bs, replace=False)
+                    X_batch, Y_batch = X_tr[batch_idx], Y_tr[batch_idx]
+                else:
+                    X_batch, Y_batch = X_tr, Y_tr
 
-        #compute grad and step in the direction that reduces mse
-        grad   = numerical_gradient(lambda p: mse(p, X_batch, Y_batch), params)
-        params = optimizer.step(params, grad)
+            #compute grad: all 2*n_params*n_samples tasks dispatched in one pool.map call
+                with timed("numerical gradient [epoch]"):
+                    grad = numerical_gradient_parallel(params, X_batch, Y_batch, pool)
+                params = optimizer.step(params, grad)
 
-        #log progress every log_every epochs, and at the last epoch
-        if epoch % log_every == 0 or epoch == epochs - 1:
-            train_loss = mse(params, X_tr, Y_tr)
-            train_acc  = accuracy(params, X_tr, Y_tr)
-            print(f"epoch {epoch:3d}, loss {train_loss:.4f}, acc {train_acc:.3f}")
+            #log progress every log_every epochs, and at the last epoch
+                if epoch % log_every == 0 or epoch == epochs - 1:
+                    with timed("mse and accuracy"):
+                        train_loss = mse(params, X_tr, Y_tr, pool)
+                        train_acc = accuracy(params, X_tr, Y_tr, pool)
+                    print(f"epoch {epoch:3d}, loss {train_loss:.4f}, acc {train_acc:.3f}")
 
-            #append for later plot and save in model dict
-            history.append({"epoch": epoch, "loss": train_loss, "acc": train_acc})
+                    #append for later plot and save in model dict
+                    history.append({"epoch": epoch, "loss": train_loss, "acc": train_acc})
 
-    test_loss = mse(params, X_te, Y_te)
-    test_acc  = accuracy(params, X_te, Y_te)
+        test_loss = mse(params, X_te, Y_te, pool)
+        test_acc  = accuracy(params, X_te, Y_te, pool)
     print(f"\ntest loss: {test_loss:.4f}  |  test acc: {test_acc:.3f}")
 
     #save model and results

@@ -13,6 +13,7 @@ from utils  import load_model, RESULTS_DIR
 from probe  import reconstruct_test_split, classify_samples, print_classification_report
 from plots  import (plot_training_curves, plot_scatter,
                         plot_score_distribution, plot_param_values)
+from profiling import set_enabled, reset_profiler, print_report
 
 
 HERE = Path(__file__).parent
@@ -20,6 +21,9 @@ HERE = Path(__file__).parent
 
 #comand-line training
 def cmd_train(args):
+    if args.timeit:
+        reset_profiler()
+    set_enabled(args.timeit)
     
     #if sweep is set, other flags are ignored
     if args.sweep:
@@ -34,6 +38,8 @@ def cmd_train(args):
         use_mnist=args.mnist, save_path=args.save,
     )
     log_csv([result], args.csv)
+    if args.timeit:
+        print_report("\ntraining timing profile")
 
 
 #comand-line probe and plot. probe runs the circuit on test again and compares to saved results, then generates plots
@@ -110,6 +116,7 @@ def build_parser():
     train_parser.add_argument("--sweep", action="store_true", help="run lr sweep")
     train_parser.add_argument("--save", type=str, default=None)
     train_parser.add_argument("--csv", type=str, default=None)
+    train_parser.add_argument("--timeit", action="store_true", help="collect and print timing table")
 
     #probe and plot
     probe_parser = subparsers.add_parser(
